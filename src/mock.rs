@@ -4,6 +4,7 @@ use atomic_shim::AtomicU64;
 use std::{
     sync::{atomic::Ordering, Arc},
     time::Duration,
+    cell::RefCell;
 };
 
 /// Type which can be converted into a nanosecond representation.
@@ -40,11 +41,23 @@ pub struct Mock {
     offset: Arc<AtomicU64>,
 }
 
+thread_local! {
+    static CURRENT_MOCK: RefCell<Arc<AtomicU64>> = RefCell::new(Arc::new(AtomicU64::new(0)));
+}
+
 impl Mock {
     pub(crate) fn new() -> Self {
-        Self {
-            offset: Arc::new(AtomicU64::new(0)),
-        }
+        let offset = Arc::new(AtomicU64::new(0));
+        CURRENT_MOCK.with(|current| *current.borrow_mut() = offset.clone());
+        Self { offset }
+    }
+
+    // Don't ever inline the thread-local access into `Instant::recent`, which
+    // should be tiny when not using mocks...
+    #[inline(never)]
+    #[cold]
+    pub(crate) fn recent() -> u64 {
+        CURRENT_MOCK.try_with(|cur| cur.borrow().load(Ordering::Acquire)).unwrap_or(0)
     }
 
     /// Increments the time by the given amount.

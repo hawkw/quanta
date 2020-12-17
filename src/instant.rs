@@ -4,6 +4,7 @@ use metrics_core::AsNanoseconds;
 use std::cmp::{Ord, Ordering, PartialOrd};
 use std::fmt;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
+use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 
 /// A point-in-time wall-clock measurement.
@@ -20,6 +21,37 @@ use std::time::Duration;
 pub struct Instant(pub(crate) u64);
 
 impl Instant {
+    /// Gets the most recent current time, scaled to reference time.
+    ///
+    /// This method provides ultra-low-overhead access to a slightly-delayed version of the current
+    /// time. Instead of querying the underlying source clock directly, a shared, global value is
+    /// read directly without the need to scale to reference time.
+    ///
+    /// The upkeep thread must be started in order to update the time. You can read the
+    /// documentation for [`Builder`] for more information on starting the upkeep thread, as well
+    /// as the details of the "current time" mechanism.
+    ///
+    /// If the upkeep thread has not been started, the return value will be `0`.
+    ///
+    /// If a mock timer has been created on the current thread, this will return
+    /// the mock timer's current timestamp, instead.
+    #[inline]
+    pub fn recent() -> Self {
+        let recent = crate::GLOBAL_RECENT.load(Relaxed);
+
+        if recent != 0 {
+            return Self(recent);
+        }
+
+        // NOTE(eliza): if we wanted to optimize getting the recent time when an
+        // upkeep thread has not been spawned but mocks are not in use, we
+        // *could* have a special sentinel value (presumably `u64::MAX_VALUE`)
+        // indicating that mock timers are in use, and only call `Mock::recent`
+        // if `GLOBAL_RECENT is equal to that, thus avoiding the TLS hit in this
+        // case.
+        Self(crate::Mock::recent())
+    }
+
     /// Returns the amount of time elapsed from another instant to this one.
     ///
     /// # Panics
